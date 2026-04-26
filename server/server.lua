@@ -1,280 +1,396 @@
+-----------------------------------------------------------------------------------------------------------------------------------------
+-- ESX
+-----------------------------------------------------------------------------------------------------------------------------------------
+ESX = exports["es_extended"]:getSharedObject()
 
-local Tunnel = module("vrp","lib/Tunnel")
-local Proxy = module("vrp","lib/Proxy")
-vRP = Proxy.getInterface("vRP")
-vRPclient = Tunnel.getInterface("vRP")
-src = {}
-Tunnel.bindInterface("mpr-cars", src)
-vCLIENT = Tunnel.getInterface("mpr-cars")
-function src.checkPermission()
-    local user_id = vRP.getUserId(source)
+-----------------------------------------------------------------------------------------------------------------------------------------
+-- HELPERS
+-----------------------------------------------------------------------------------------------------------------------------------------
+local function getVehicleData(source)
+    -- Returns: plate, vname via ESX player's vehicle state
+    -- We store tuning under xPlayer identifier + plate key
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then return nil, nil end
+    return xPlayer
+end
+
+local function getTuningKey(identifier, plate, vname)
+    return "customVehicle:" .. identifier .. "veh_" .. (vname or "unknown") .. "placa_" .. plate
+end
+
+local function getPlateFromNetVehicle(netId)
+    -- Attempt to get plate from networked vehicle entity
+    if NetworkDoesEntityExistWithNetworkId(netId) then
+        local veh = NetToVeh(netId)
+        if veh and veh ~= 0 then
+            return string.gsub(GetVehicleNumberPlateText(veh), "%s+", ""),
+                   GetEntityModel(veh)
+        end
+    end
+    return nil, nil
+end
+
+local function getNearestVehicleForPlayer(source, radius)
+    -- Get coords from player ped via native
+    local ped    = GetPlayerPed(source)
+    local coords = GetEntityCoords(ped)
+    local nearby = GetClosestVehicle(coords.x, coords.y, coords.z, radius, 0, 70)
+    if nearby and nearby ~= 0 then
+        return nearby
+    end
+    return nil
+end
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+-- PERMISSION CHECKS
+-----------------------------------------------------------------------------------------------------------------------------------------
+ESX.RegisterServerCallback("mpr-cars:checkPermission", function(source, cb)
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then cb(false) return end
+
     if cfg.permissaoParaInstalar.existePermissao then
-        for k, group in pairs(cfg.permissaoParaInstalar.permissoes) do
-            if vRP.hasPermission(user_id, group) then
-                return true
+        for _, group in pairs(cfg.permissaoParaInstalar.permissoes) do
+            if xPlayer.getGroup() == group or xPlayer.hasGroup(group) then
+                cb(true)
+                return
             end
         end
+        cb(false)
     else
-        return true
+        cb(true)
     end
-    return false
-end
-function src.checkPermissionShop(perm)
-    local user_id = vRP.getUserId(source)
-    if vRP.hasPermission(user_id, perm) then
-        return true
+end)
+
+ESX.RegisterServerCallback("mpr-cars:checkPermissionShop", function(source, cb, perm)
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then cb(false) return end
+
+    if xPlayer.getGroup() == perm or xPlayer.hasGroup(perm) then
+        cb(true)
     else
-        return false
+        cb(false)
     end
-end
-function src.installXenon(car)
-    local source = source
-    local user_id = vRP.getUserId(source)
-    if vRP.tryGetInventoryItem(user_id, "moduloxenon", 1) then
-        vRPclient._playAnim(source, true,{{"mini@repair","fixing_a_ped",1}}, true)
-        TriggerClientEvent("progress", source, 30000, "Instalando módulo de Xenon")
-        SetTimeout(31000, function()
-            vRPclient.DeletarObjeto(source)
-            vRPclient._stopAnim(source,false)
-            src.setXenon(car)
-        end)
-    else
-        TriggerClientEvent("Notify",source,"negado","Você não possui um módulo xenon.")
-    end
-end
-function src.setXenon(pVehicle)
-    local source = source
-    local vehicle, vnetid, placa, vname, lock, banned = vRPclient.vehList(source, 5)
-    if vehicle == pVehicle then
-        if vehicle and placa then
-            local placa_user_id = vRP.getUserByRegistration(placa)
-            if placa_user_id ~= nil then
-                local tuning = vRP.getSData("customVehicle:u"..placa_user_id.."veh_"..vname.."placa_".. placa) or {}
-                local custom = json.decode(tuning) or {}
-                custom.xenonControl = 1
-                vRP.setSData("customVehicle:u"..placa_user_id.."veh_"..vname.."placa_".. placa,json.encode(custom))
-            end
-        end
-    end
-end
-function src.checkXenon()
-    local source = source
-    local user_id = vRP.getUserId(source)
-    local vehicle, vnetid, placa, vname, lock, banned = vRPclient.vehList(source, 5)
-    if vehicle and placa then
-        local placa_user_id = vRP.getUserByRegistration(placa)
-        if placa_user_id ~= nil then
-            if user_id == placa_user_id and cfg.apenasDonoAcessaXenon then
-                local tuning = vRP.getSData("customVehicle:u"..user_id.."veh_"..vname.."placa_".. placa) or {}
-                local custom = json.decode(tuning) or {}
-                
-                if custom.xenonControl == 1 then
-                    return true
-                else
-                    return false
-                end
+end)
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+-- XENON CALLBACKS & EVENTS
+-----------------------------------------------------------------------------------------------------------------------------------------
+ESX.RegisterServerCallback("mpr-cars:checkXenon", function(source, cb)
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then cb(false) return end
+
+    local identifier = xPlayer.getIdentifier()
+    local veh        = getNearestVehicleForPlayer(source, 5)
+    if not veh then cb(false) return end
+
+    local plate = string.gsub(GetVehicleNumberPlateText(veh), "%s+", "")
+    local vname = tostring(GetEntityModel(veh))
+
+    if plate and plate ~= "" then
+        local key    = getTuningKey(identifier, plate, vname)
+        local tuning = exports.oxmysql and nil -- fallback: use KVP
+        -- Using FiveM built-in KVP (no external DB required for tuning flags)
+        local raw    = GetResourceKvpString(key)
+        local custom = raw and json.decode(raw) or {}
+
+        if cfg.apenasDonoAcessaXenon then
+            -- Only owner can access
+            local ownerKey = "vehicle_owner:" .. plate
+            local ownerId  = GetResourceKvpString(ownerKey)
+            if ownerId and ownerId == identifier then
+                cb(custom.xenonControl == 1)
             else
-                local tuning = vRP.getSData("customVehicle:u"..placa_user_id.."veh_"..vname.."placa_".. placa) or {}
-                local custom = json.decode(tuning) or {}
-                
-                if custom.xenonControl == 1 then
-                    return true
-                else
-                    return false
-                end
+                cb(false)
             end
-        end
-        
-    end
-    return false
-end
-function src.installNeon(car)
-    local source = source
-    local user_id = vRP.getUserId(source)
-    if vRP.tryGetInventoryItem(user_id,"moduloneon", 1) then
-        vRPclient._playAnim(source, true,{{"mini@repair","fixing_a_ped",1}}, true)
-        TriggerClientEvent("progress", source, 30000, "Instalando módulo de neon")
-        SetTimeout(31000, function()
-            vRPclient.DeletarObjeto(source)
-            vRPclient._stopAnim(source, false)
-            src.setNeon(car)
-        end)
-    else
-        TriggerClientEvent("Notify",source,"negado","Você não possui um módulo de Neon.")
-    end
-end
-function src.setNeon(pVehicle)
-    local source = source
-    local vehicle, vnetid, placa, vname, lock, banned = vRPclient.vehList(source, 5)
-    if vehicle == pVehicle then
-        if vehicle and placa then
-            local placa_user_id = vRP.getUserByRegistration(placa)
-            if placa_user_id ~= nil then
-                local tuning = vRP.getSData("customVehicle:u"..placa_user_id.."veh_"..vname.."placa_".. placa) or {}
-                local custom = json.decode(tuning) or {}
-                custom.neonControl = 1
-                vRP.setSData("customVehicle:u"..placa_user_id.."veh_"..vname.."placa_".. placa,json.encode(custom))
-            end
-        end
-    end
-end
-function src.checkNeon()
-    local source = source
-    local user_id = vRP.getUserId(source)
-    local vehicle, vnetid, placa, vname, lock, banned = vRPclient.vehList(source, 5)
-    if vehicle and placa then
-        local placa_user_id = vRP.getUserByRegistration(placa)
-        if placa_user_id ~= nil then
-            if user_id == placa_user_id and cfg.apenasDonoAcessaNeon then
-                local tuning = vRP.getSData("customVehicle:u"..user_id.."veh_"..vname.."placa_".. placa) or {}
-                local custom = json.decode(tuning) or {}
-                
-                if custom.neonControl == 1 then
-                    return true
-                else
-                    return false
-                end
-            else
-                local tuning = vRP.getSData("customVehicle:u"..placa_user_id.."veh_"..vname.."placa_".. placa) or {}
-                local custom = json.decode(tuning) or {}
-                
-                if custom.neonControl == 1 then
-                    return true
-                else
-                    return false
-                end
-            end
-        end
-        
-    end
-    return false
-end
-function src.anim()
-    local source = source
-    vRPclient._playAnim(source, false, {{"anim@amb@clubhouse@tutorial@bkr_tut_ig3@", "machinic_loop_mechandplayer"}}, true)
-    SetTimeout(7000, function()
-        vRPclient.DeletarObjeto(source)
-        vRPclient._stopAnim(source,false)
-        vCLIENT.instalando(source, false)
-    end)
-end
-function src.setSuspensao(pVehicle)
-    local source = source
-    local user_id = vRP.getUserId(source)
-    local vehicle, vnetid, placa, vname, lock, banned = vRPclient.vehList(source, 5)
-    if vRP.tryGetInventoryItem(user_id, "suspensaoar", 1) then
-        if vehicle == pVehicle then
-            if vehicle and placa then
-                local placa_user_id = vRP.getUserByRegistration(placa)
-                if placa_user_id ~= nil then
-                    local tuning = vRP.getSData("customVehicle:u"..placa_user_id.."veh_"..vname.."placa_".. placa) or {}
-                    local custom = json.decode(tuning) or {}
-                    custom.suspensaoAr = 1
-                    vRP.setSData("customVehicle:u"..placa_user_id.."veh_"..vname.."placa_".. placa,json.encode(custom))
-                end
-            end
-        end
-    else
-        TriggerClientEvent("Notify",source,"negado","Você não possui um Kit de suspensão a ar.")
-    end
-end
-function src.checkSuspension()
-    local source = source
-    local user_id = vRP.getUserId(source)
-    local vehicle, vnetid, placa, vname, lock, banned = vRPclient.vehList(source, 5)
-    if vehicle and placa then
-        local placa_user_id = vRP.getUserByRegistration(placa)
-        if placa_user_id ~= nil then
-            if user_id == placa_user_id and cfg.apenasDonoAcessaSuspensao then
-                local tuning = vRP.getSData("customVehicle:u"..user_id.."veh_"..vname.."placa_".. placa) or {}
-                local custom = json.decode(tuning) or {}
-                
-                if custom.suspensaoAr == 1 then
-                    return true
-                else
-                    return false
-                end
-            else
-                local tuning = vRP.getSData("customVehicle:u"..placa_user_id.."veh_"..vname.."placa_".. placa) or {}
-                local custom = json.decode(tuning) or {}
-                
-                if custom.suspensaoAr == 1 then
-                    return true
-                else
-                    return false
-                end
-            end
-        end
-        
-    end
-    return false
-end
-function src.setPreset(value)
-    local source = source
-    local user_id = vRP.getUserId(source)
-    local vehicle, vnetid, placa, vname, lock, banned = vRPclient.vehList(source, 5)
-    if vehicle and placa then
-        local tuning = vRP.getSData("customVehicle:u"..user_id.."veh_"..vname.."placa_".. placa) or {}
-        local custom = json.decode(tuning) or {}
-        
-        custom.presetSuspe = value
-        vRP.setSData("customVehicle:u"..user_id.."veh_"..vname.."placa_".. placa,json.encode(custom))
-    end
-end
-function src.returnPreset()
-    local source = source
-    local user_id = vRP.getUserId(source)
-    local vehicle, vnetid, placa, vname, lock, banned = vRPclient.vehList(source, 5)
-    if vehicle and placa then
-        local tuning = vRP.getSData("customVehicle:u"..user_id.."veh_"..vname.."placa_".. placa) or {}
-        local custom = json.decode(tuning) or {}
-        
-        if custom.presetSuspe ~= nil then
-            return custom.presetSuspe
         else
-            return 0
+            cb(custom.xenonControl == 1)
         end
+    else
+        cb(false)
     end
-    return 0
-end
-RegisterNetEvent("tryzosuspe")
-AddEventHandler('tryzosuspe', function(vehicle, pAlturaAtual, pAlturaAnterior, variacao, type)
+end)
+
+RegisterNetEvent("mpr-cars:installXenon")
+AddEventHandler("mpr-cars:installXenon", function(netVehicle)
+    local source  = source
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then return end
+
+    local item = xPlayer.getInventoryItem("moduloxenon")
+    if item and item.count >= 1 then
+        -- Play animation on client
+        TriggerClientEvent("mpr-cars:playAnim", source, true, {{"mini@repair", "fixing_a_ped", 1}})
+        TriggerClientEvent("progress", source, 30000, "Instalando módulo de Xenon")
+
+        SetTimeout(31000, function()
+            TriggerClientEvent("mpr-cars:stopAnim", source)
+
+            local identifier = xPlayer.getIdentifier()
+            local veh        = NetworkGetEntityFromNetworkId(netVehicle)
+            if veh and veh ~= 0 then
+                local plate = string.gsub(GetVehicleNumberPlateText(veh), "%s+", "")
+                local vname = tostring(GetEntityModel(veh))
+                local key   = getTuningKey(identifier, plate, vname)
+
+                -- Store owner reference
+                SetResourceKvp("vehicle_owner:" .. plate, identifier)
+
+                local raw    = GetResourceKvpString(key)
+                local custom = raw and json.decode(raw) or {}
+                custom.xenonControl = 1
+                SetResourceKvp(key, json.encode(custom))
+
+                xPlayer.removeInventoryItem("moduloxenon", 1)
+                TriggerClientEvent("esx:showNotification", source, "Módulo de Xenon instalado com sucesso!")
+            end
+        end)
+    else
+        TriggerClientEvent("esx:showNotification", source, "Você não possui um módulo xenon.")
+    end
+end)
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+-- NEON CALLBACKS & EVENTS
+-----------------------------------------------------------------------------------------------------------------------------------------
+ESX.RegisterServerCallback("mpr-cars:checkNeon", function(source, cb)
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then cb(false) return end
+
+    local identifier = xPlayer.getIdentifier()
+    local veh        = getNearestVehicleForPlayer(source, 5)
+    if not veh then cb(false) return end
+
+    local plate = string.gsub(GetVehicleNumberPlateText(veh), "%s+", "")
+    local vname = tostring(GetEntityModel(veh))
+
+    if plate and plate ~= "" then
+        local key    = getTuningKey(identifier, plate, vname)
+        local raw    = GetResourceKvpString(key)
+        local custom = raw and json.decode(raw) or {}
+
+        if cfg.apenasDonoAcessaNeon then
+            local ownerKey = "vehicle_owner:" .. plate
+            local ownerId  = GetResourceKvpString(ownerKey)
+            if ownerId and ownerId == identifier then
+                cb(custom.neonControl == 1)
+            else
+                cb(false)
+            end
+        else
+            cb(custom.neonControl == 1)
+        end
+    else
+        cb(false)
+    end
+end)
+
+RegisterNetEvent("mpr-cars:installNeon")
+AddEventHandler("mpr-cars:installNeon", function(netVehicle)
+    local source  = source
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then return end
+
+    local item = xPlayer.getInventoryItem("moduloneon")
+    if item and item.count >= 1 then
+        TriggerClientEvent("mpr-cars:playAnim", source, true, {{"mini@repair", "fixing_a_ped", 1}})
+        TriggerClientEvent("progress", source, 30000, "Instalando módulo de neon")
+
+        SetTimeout(31000, function()
+            TriggerClientEvent("mpr-cars:stopAnim", source)
+
+            local identifier = xPlayer.getIdentifier()
+            local veh        = NetworkGetEntityFromNetworkId(netVehicle)
+            if veh and veh ~= 0 then
+                local plate = string.gsub(GetVehicleNumberPlateText(veh), "%s+", "")
+                local vname = tostring(GetEntityModel(veh))
+                local key   = getTuningKey(identifier, plate, vname)
+
+                SetResourceKvp("vehicle_owner:" .. plate, identifier)
+
+                local raw    = GetResourceKvpString(key)
+                local custom = raw and json.decode(raw) or {}
+                custom.neonControl = 1
+                SetResourceKvp(key, json.encode(custom))
+
+                xPlayer.removeInventoryItem("moduloneon", 1)
+                TriggerClientEvent("esx:showNotification", source, "Módulo de Neon instalado com sucesso!")
+            end
+        end)
+    else
+        TriggerClientEvent("esx:showNotification", source, "Você não possui um módulo de Neon.")
+    end
+end)
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+-- SUSPENSION CALLBACKS & EVENTS
+-----------------------------------------------------------------------------------------------------------------------------------------
+ESX.RegisterServerCallback("mpr-cars:checkSuspension", function(source, cb)
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then cb(false) return end
+
+    local identifier = xPlayer.getIdentifier()
+    local veh        = getNearestVehicleForPlayer(source, 5)
+    if not veh then cb(false) return end
+
+    local plate = string.gsub(GetVehicleNumberPlateText(veh), "%s+", "")
+    local vname = tostring(GetEntityModel(veh))
+
+    if plate and plate ~= "" then
+        local key    = getTuningKey(identifier, plate, vname)
+        local raw    = GetResourceKvpString(key)
+        local custom = raw and json.decode(raw) or {}
+
+        if cfg.apenasDonoAcessaSuspensao then
+            local ownerKey = "vehicle_owner:" .. plate
+            local ownerId  = GetResourceKvpString(ownerKey)
+            if ownerId and ownerId == identifier then
+                cb(custom.suspensaoAr == 1)
+            else
+                cb(false)
+            end
+        else
+            cb(custom.suspensaoAr == 1)
+        end
+    else
+        cb(false)
+    end
+end)
+
+RegisterNetEvent("mpr-cars:playInstallAnim")
+AddEventHandler("mpr-cars:playInstallAnim", function()
+    local source = source
+    TriggerClientEvent("mpr-cars:playAnim", source, false, {{"anim@amb@clubhouse@tutorial@bkr_tut_ig3@", "machinic_loop_mechandplayer"}})
+    SetTimeout(7000, function()
+        TriggerClientEvent("mpr-cars:stopAnim", source)
+        TriggerClientEvent("mpr-cars:setInstalando", source, false)
+    end)
+end)
+
+RegisterNetEvent("mpr-cars:setSuspensao")
+AddEventHandler("mpr-cars:setSuspensao", function(netVehicle)
+    local source  = source
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then return end
+
+    local item = xPlayer.getInventoryItem("suspensaoar")
+    if item and item.count >= 1 then
+        local identifier = xPlayer.getIdentifier()
+        local veh        = NetworkGetEntityFromNetworkId(netVehicle)
+        if veh and veh ~= 0 then
+            local plate = string.gsub(GetVehicleNumberPlateText(veh), "%s+", "")
+            local vname = tostring(GetEntityModel(veh))
+            local key   = getTuningKey(identifier, plate, vname)
+
+            SetResourceKvp("vehicle_owner:" .. plate, identifier)
+
+            local raw    = GetResourceKvpString(key)
+            local custom = raw and json.decode(raw) or {}
+            custom.suspensaoAr = 1
+            SetResourceKvp(key, json.encode(custom))
+
+            xPlayer.removeInventoryItem("suspensaoar", 1)
+        end
+    else
+        TriggerClientEvent("esx:showNotification", source, "Você não possui um Kit de suspensão a ar.")
+    end
+end)
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+-- PRESET CALLBACKS & EVENTS
+-----------------------------------------------------------------------------------------------------------------------------------------
+ESX.RegisterServerCallback("mpr-cars:returnPreset", function(source, cb)
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then cb(0) return end
+
+    local identifier = xPlayer.getIdentifier()
+    local veh        = getNearestVehicleForPlayer(source, 5)
+    if not veh then cb(0) return end
+
+    local plate = string.gsub(GetVehicleNumberPlateText(veh), "%s+", "")
+    local vname = tostring(GetEntityModel(veh))
+    local key   = getTuningKey(identifier, plate, vname)
+    local raw   = GetResourceKvpString(key)
+    local custom = raw and json.decode(raw) or {}
+
+    if custom.presetSuspe ~= nil then
+        cb(custom.presetSuspe)
+    else
+        cb(0)
+    end
+end)
+
+RegisterNetEvent("mpr-cars:setPreset")
+AddEventHandler("mpr-cars:setPreset", function(value)
+    local source  = source
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then return end
+
+    local identifier = xPlayer.getIdentifier()
+    local veh        = getNearestVehicleForPlayer(source, 5)
+    if not veh then return end
+
+    local plate = string.gsub(GetVehicleNumberPlateText(veh), "%s+", "")
+    local vname = tostring(GetEntityModel(veh))
+    local key   = getTuningKey(identifier, plate, vname)
+    local raw   = GetResourceKvpString(key)
+    local custom = raw and json.decode(raw) or {}
+
+    custom.presetSuspe = value
+    SetResourceKvp(key, json.encode(custom))
+end)
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+-- SUSPENSION SYNC
+-----------------------------------------------------------------------------------------------------------------------------------------
+RegisterNetEvent("mpr-cars:tryzosuspe")
+AddEventHandler("mpr-cars:tryzosuspe", function(vehicle, pAlturaAtual, pAlturaAnterior, variacao, typeDir)
     local altura = pAlturaAnterior
-    if type == "subir" then
+    if typeDir == "subir" then
         while altura > pAlturaAtual do
             altura = altura - variacao
-            TriggerClientEvent("synczosuspe", -1, vehicle, altura)
+            TriggerClientEvent("mpr-cars:synczosuspe", -1, vehicle, altura)
             Citizen.Wait(1)
         end
-    elseif type == "descer" then
+    elseif typeDir == "descer" then
         while altura < pAlturaAtual do
             altura = altura + variacao
-            TriggerClientEvent("synczosuspe", -1, vehicle, altura)
+            TriggerClientEvent("mpr-cars:synczosuspe", -1, vehicle, altura)
             Citizen.Wait(1)
         end
     end
 end)
-RegisterServerEvent("departamento-comprar")
-AddEventHandler("departamento-comprar",function(item)
-    local source = source
-    local user_id = vRP.getUserId(source)
-    if user_id then
-        for k, v in pairs(cfg.valores) do
-            if item == v.item then
-                if vRP.getInventoryWeight(user_id) + vRP.getItemWeight(v.item) * v.quantidade <= vRP.getInventoryMaxWeight(user_id) then
-                    local preco = parseInt(v.compra)
-                    if preco then
-                        if vRP.tryPayment(user_id, parseInt(preco)) then
-                            TriggerClientEvent("Notify",source,"sucesso","Comprou <b>"..parseInt(v.quantidade).."x "..vRP.itemNameList(v.item).."</b> por <b>$"..vRP.format(parseInt(preco)).."</b>.")
-                            vRP.giveInventoryItem(user_id, v.item, parseInt(v.quantidade))
-                        else
-                            TriggerClientEvent("Notify",source,"negado","Dinheiro insuficiente.")
-                        end
-                    end
-                else
-                    TriggerClientEvent("Notify",source,"negado","Espaço insuficiente.")
-                end
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+-- SHOP PURCHASE
+-----------------------------------------------------------------------------------------------------------------------------------------
+RegisterNetEvent("mpr-cars:comprar")
+AddEventHandler("mpr-cars:comprar", function(item)
+    local source  = source
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then return end
+
+    for _, v in pairs(cfg.valores) do
+        if item == v.item then
+            local weight    = xPlayer.getInventoryItem(v.item)
+            local preco     = tonumber(v.compra)
+            local quantidade = tonumber(v.quantidade)
+
+            if xPlayer.getMoney() >= preco then
+                xPlayer.removeMoney(preco)
+                xPlayer.addInventoryItem(v.item, quantidade)
+                TriggerClientEvent("esx:showNotification", source,
+                    "Comprou ~g~" .. quantidade .. "x " .. v.item .. "~s~ por ~r~$" .. preco .. "~s~.")
+            else
+                TriggerClientEvent("esx:showNotification", source, "Dinheiro insuficiente.")
             end
+            return
         end
     end
 end)
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+-- ANIMATION EVENTS (client-side handlers triggered from server)
+-----------------------------------------------------------------------------------------------------------------------------------------
+-- These are triggered on client via TriggerClientEvent("mpr-cars:playAnim") and ("mpr-cars:stopAnim")
+-- The actual TaskPlayAnim natives run on client; registered below as net events on client side
+-- (handled in client.lua via RegisterNetEvent)
