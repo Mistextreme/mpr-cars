@@ -3,20 +3,22 @@ game "gta5"
 
 ui_page "nui/index.html"
 
+shared_scripts {
+    "@es_extended/imports.lua",
+    "cfg/config.lua"
+}
+
 client_scripts {
-	"@vrp/lib/utils.lua",
-	"client/*",
-	"cfg/*"
+    "client/client.lua"
 }
 
 server_scripts {
-	"@vrp/lib/utils.lua",
-	"server/*",
-	"cfg/*"
+    "@es_extended/imports.lua",
+    "server/server.lua"
 }
 
 files {
-	"nui/*",
-	"nui/imgs/*",
-	"nui/sounds/*"
+    "nui/*",
+    "nui/imgs/*",
+    "nui/sounds/*"
 }
