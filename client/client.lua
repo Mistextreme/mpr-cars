@@ -15,7 +15,7 @@ local menuactive     = false
 -----------------------------------------------------------------------------------------------------------------------------------------
 -- HELPERS
 -----------------------------------------------------------------------------------------------------------------------------------------
-local function Notify(type, msg, duration)
+local function Notify(notifyType, msg)
     ESX.ShowNotification(msg)
 end
 
@@ -128,86 +128,105 @@ local function getNearestVehicle(radius)
 end
 
 -----------------------------------------------------------------------------------------------------------------------------------------
--- COMMANDS
+-- INIT NUI STATE
 -----------------------------------------------------------------------------------------------------------------------------------------
 Citizen.CreateThread(function()
     closeNuis()
+end)
 
-    -- XENON COMMAND
-    RegisterCommand(cfg.comandoXenon, function(source, args, rawCommand)
-        local ped     = PlayerPedId()
-        local vehicle = GetVehiclePedIsUsing(ped)
-        if vehicle ~= 0 then
-            checkXenon(function(has)
-                if has then
-                    local vehicleSpeed = math.ceil(GetEntitySpeed(vehicle) * 3.605936)
-                    local cor          = GetVehicleXenonLightsColour(vehicle)
-                    if vehicleSpeed <= 25 then
-                        ToggleVehicleMod(vehicle, 22, true)
-                        SetNuiFocus(true, true)
-                        SendNUIMessage({ type = "openXenon", color = cor })
-                    else
-                        Notify("aviso", "Você está muito rápido!")
-                    end
-                else
-                    Notify("aviso", "O veículo não possui o módulo de xenon.")
-                end
-            end)
-        else
-            Notify("aviso", "Você não está em um veículo!")
-        end
-    end)
+-----------------------------------------------------------------------------------------------------------------------------------------
+-- COMMANDS (top-level, not inside a thread)
+-----------------------------------------------------------------------------------------------------------------------------------------
 
-    -- NEON COMMAND
-    RegisterCommand(cfg.comandoNeon, function(source, args, rawCommand)
-        local ped     = PlayerPedId()
-        local vehicle = GetVehiclePedIsUsing(ped)
-        if vehicle ~= 0 then
-            checkNeon(function(has)
-                if has then
-                    local vehicleSpeed = math.ceil(GetEntitySpeed(vehicle) * 3.605936)
-                    local cor          = { r = 255, g = 255, b = 255 }
-                    if checkNeonIsEnable(vehicle) then
-                        local r, g, b = GetVehicleNeonLightsColour(vehicle)
-                        cor = { r = r, g = g, b = b }
-                    end
-                    if vehicleSpeed <= 25 then
-                        SetNuiFocus(true, true)
-                        SendNUIMessage({ type = "openNeon", color = cor })
-                    else
-                        Notify("aviso", "Você está muito rápido!")
-                    end
+-- XENON COMMAND
+RegisterCommand(cfg.comandoXenon, function(source, args, rawCommand)
+    local ped     = PlayerPedId()
+    local vehicle = GetVehiclePedIsUsing(ped)
+    if vehicle ~= 0 then
+        checkXenon(function(has)
+            if has then
+                local vehicleSpeed = math.ceil(GetEntitySpeed(vehicle) * 3.605936)
+                local cor          = GetVehicleXenonLightsColour(vehicle)
+                if vehicleSpeed <= 25 then
+                    ToggleVehicleMod(vehicle, 22, true)
+                    SetNuiFocus(true, true)
+                    SendNUIMessage({ type = "openXenon", color = cor })
                 else
-                    Notify("aviso", "O veículo não possui o módulo de neon.")
+                    Notify("aviso", "Você está muito rápido!")
                 end
-            end)
-        else
-            Notify("aviso", "Você não está em um veículo!")
-        end
-    end)
+            else
+                Notify("aviso", "O veículo não possui o módulo de xenon.")
+            end
+        end)
+    else
+        Notify("aviso", "Você não está em um veículo!")
+    end
+end)
 
-    -- SUSPENSION COMMAND
-    RegisterCommand(cfg.comandoSuspensao, function(source, args, rawCommand)
-        local ped     = PlayerPedId()
-        local vehicle = GetVehiclePedIsUsing(ped)
-        if vehicle ~= 0 then
-            checkSuspension(function(has)
-                if has then
-                    local vehicleSpeed = math.ceil(GetEntitySpeed(vehicle) * 3.605936)
-                    if vehicleSpeed <= 25 then
-                        SetNuiFocus(true, true)
-                        SendNUIMessage({ type = "openControle" })
-                    else
-                        Notify("aviso", "Você está muito rápido!")
-                    end
-                else
-                    Notify("aviso", "O veículo não possui suspensão a ar!")
+-- NEON COMMAND
+RegisterCommand(cfg.comandoNeon, function(source, args, rawCommand)
+    local ped     = PlayerPedId()
+    local vehicle = GetVehiclePedIsUsing(ped)
+    if vehicle ~= 0 then
+        checkNeon(function(has)
+            if has then
+                local vehicleSpeed = math.ceil(GetEntitySpeed(vehicle) * 3.605936)
+                local cor          = { r = 255, g = 255, b = 255 }
+                if checkNeonIsEnable(vehicle) then
+                    local r, g, b = GetVehicleNeonLightsColour(vehicle)
+                    cor = { r = r, g = g, b = b }
                 end
-            end)
-        else
-            Notify("aviso", "Você não está em um veículo!")
+                if vehicleSpeed <= 25 then
+                    SetNuiFocus(true, true)
+                    SendNUIMessage({ type = "openNeon", color = cor })
+                else
+                    Notify("aviso", "Você está muito rápido!")
+                end
+            else
+                Notify("aviso", "O veículo não possui o módulo de neon.")
+            end
+        end)
+    else
+        Notify("aviso", "Você não está em um veículo!")
+    end
+end)
+
+-- SUSPENSION COMMAND
+RegisterCommand(cfg.comandoSuspensao, function(source, args, rawCommand)
+    local ped     = PlayerPedId()
+    local vehicle = GetVehiclePedIsUsing(ped)
+    if vehicle ~= 0 then
+        checkSuspension(function(has)
+            if has then
+                local vehicleSpeed = math.ceil(GetEntitySpeed(vehicle) * 3.605936)
+                if vehicleSpeed <= 25 then
+                    SetNuiFocus(true, true)
+                    SendNUIMessage({ type = "openControle" })
+                else
+                    Notify("aviso", "Você está muito rápido!")
+                end
+            else
+                Notify("aviso", "O veículo não possui suspensão a ar!")
+            end
+        end)
+    else
+        Notify("aviso", "Você não está em um veículo!")
+    end
+end)
+
+-- INSTALL COMMAND
+RegisterCommand("instalar", function(source, args, rawCommand)
+    if args[1] then
+        if args[1] == "xenon" then
+            TriggerEvent("mpr-cars:install_mod_xenon")
+        elseif args[1] == "neon" then
+            TriggerEvent("mpr-cars:install_mod_neon")
+        elseif args[1] == "suspe" then
+            TriggerEvent("mpr-cars:install_suspe_ar")
         end
-    end)
+    else
+        Notify("negado", "Utilize /instalar [xenon, neon ou suspe]")
+    end
 end)
 
 -----------------------------------------------------------------------------------------------------------------------------------------
@@ -216,15 +235,19 @@ end)
 RegisterNUICallback("ButtonClick", function(data, cb)
     cb({})
 
-    -- Shop purchase buttons
+    -- Shop purchase buttons (data is a plain string in this case)
     if data == "comprar-suspensao" then
         TriggerServerEvent("mpr-cars:comprar", "suspensaoar")
+        return
     elseif data == "comprar-neon" then
         TriggerServerEvent("mpr-cars:comprar", "moduloneon")
+        return
     elseif data == "comprar-xenon" then
         TriggerServerEvent("mpr-cars:comprar", "moduloxenon")
+        return
     elseif data == "fechar" then
         ToggleActionMenu()
+        return
     end
 
     if type(data) == "table" then
@@ -273,8 +296,8 @@ RegisterNUICallback("ButtonClick", function(data, cb)
 
         -- Save suspension preset
         if data.action == "savepreset" then
-            local ped        = PlayerPedId()
-            local vehicle    = GetVehiclePedIsIn(ped)
+            local ped         = PlayerPedId()
+            local vehicle     = GetVehiclePedIsIn(ped, false)
             local alturaAtual = GetVehicleSuspensionHeight(vehicle)
             TriggerServerEvent("mpr-cars:setPreset", tonumber(alturaAtual))
             Notify("sucesso", "Novo preset definido para suspensão!")
@@ -282,12 +305,12 @@ RegisterNUICallback("ButtonClick", function(data, cb)
 
         -- Suspension control
         if data.action == "useControl" then
-            local ped           = PlayerPedId()
-            local vehicle       = GetVehiclePedIsIn(ped)
+            local ped            = PlayerPedId()
+            local vehicle        = GetVehiclePedIsIn(ped, false)
             local alturaAnterior = GetVehicleSuspensionHeight(vehicle)
-            local alturaAtual   = 0
-            local typeAction    = data.typeAction
-            local variacao      = 0.003
+            local alturaAtual    = 0
+            local typeAction     = data.typeAction
+            local variacao       = 0.003
 
             if typeAction == "max" then
                 alturaAtual = tonumber(-0.09)
@@ -307,21 +330,21 @@ RegisterNUICallback("ButtonClick", function(data, cb)
             elseif typeAction == "preset" then
                 variacao = 0.003
                 returnPreset(function(preset)
-                    alturaAtual = tonumber(preset)
-                    if alturaAtual > tonumber(0.09) then
+                    local presetAltura = tonumber(preset)
+                    if presetAltura > tonumber(0.09) then
                         Notify("aviso", "Altura máxima atingida!")
                         return
                     end
-                    if alturaAtual < tonumber(-0.09) then
+                    if presetAltura < tonumber(-0.09) then
                         Notify("aviso", "Altura miníma atingida!")
                         return
                     end
-                    if alturaAnterior < alturaAtual then
+                    if alturaAnterior < presetAltura then
                         SendNUIMessage({ transactionType = "playSound", transactionFile = "esvaziar", transactionVolume = 0.5 })
-                        TriggerServerEvent("mpr-cars:tryzosuspe", VehToNet(vehicle), alturaAtual, alturaAnterior, variacao, "descer")
+                        TriggerServerEvent("mpr-cars:tryzosuspe", VehToNet(vehicle), presetAltura, alturaAnterior, variacao, "descer")
                     else
                         SendNUIMessage({ transactionType = "playSound", transactionFile = "encher", transactionVolume = 0.5 })
-                        TriggerServerEvent("mpr-cars:tryzosuspe", VehToNet(vehicle), alturaAtual, alturaAnterior, variacao, "subir")
+                        TriggerServerEvent("mpr-cars:tryzosuspe", VehToNet(vehicle), presetAltura, alturaAnterior, variacao, "subir")
                     end
                 end)
                 return
@@ -344,23 +367,6 @@ RegisterNUICallback("ButtonClick", function(data, cb)
                 TriggerServerEvent("mpr-cars:tryzosuspe", VehToNet(vehicle), alturaAtual, alturaAnterior, variacao, "subir")
             end
         end
-    end
-end)
-
------------------------------------------------------------------------------------------------------------------------------------------
--- INSTALL COMMAND
------------------------------------------------------------------------------------------------------------------------------------------
-RegisterCommand("instalar", function(source, args, rawCommand)
-    if args[1] then
-        if args[1] == "xenon" then
-            TriggerEvent("mpr-cars:install_mod_xenon")
-        elseif args[1] == "neon" then
-            TriggerEvent("mpr-cars:install_mod_neon")
-        elseif args[1] == "suspe" then
-            TriggerEvent("mpr-cars:install_suspe_ar")
-        end
-    else
-        Notify("negado", "Utilize /instalar [xenon, neon ou suspe]")
     end
 end)
 
@@ -442,75 +448,80 @@ end)
 RegisterNetEvent("mpr-cars:install_suspe_ar")
 AddEventHandler("mpr-cars:install_suspe_ar", function()
     checkPermission(function(hasPerm)
-        if hasPerm then
-            local ped = PlayerPedId()
-            vehicleInstall = getNearestVehicle(5)
-            if vehicleInstall then
-                checkSuspension(function(hasSuspe)
-                    if not hasSuspe then
-                        local coords   = nil
-                        local ppos     = GetEntityCoords(ped)
-                        partsProntas   = {}
+        if not hasPerm then
+            Notify("aviso", "Você não possui permissão para instalar suspensão a ar!")
+            return
+        end
 
-                        for _, v in ipairs(parts) do
-                            local bone = GetEntityBoneIndexByName(vehicleInstall, v)
-                            if bone ~= -1 then
-                                coords = GetWorldPositionOfEntityBone(vehicleInstall, bone)
-                                if coords then
-                                    local len = GetDistanceBetweenCoords(
-                                        vector3(ppos.x, ppos.y, ppos.z), coords)
-                                    if len < 5 then
-                                        local x, y, z = table.unpack(coords)
-                                        while vehicleInstall and partsProntas[v] == nil do
-                                            DrawMarker(1, x, y, z - 1.5, 0, 0, 0, 0, 0,
-                                                0, 1.0, 1.0, 1.7, 0, 255, 0, 155,
-                                                0, 0, 0, 1)
-                                            ppos = GetEntityCoords(ped)
-                                            len  = GetDistanceBetweenCoords(
-                                                vector3(ppos.x, ppos.y, ppos.z), coords)
-                                            if len < 1 then
-                                                DrawText3D(x, y, z, "Pressione [~r~E~w~] para instalar a suspensão nesta roda.")
-                                                if IsControlJustPressed(0, 38) then
-                                                    instalando = true
-                                                    Citizen.CreateThread(function()
-                                                        while true do
-                                                            Citizen.Wait(2000)
-                                                            vehicleInstall = getNearestVehicle(5)
-                                                            if vehicleInstall == nil or #partsProntas == 4 then
-                                                                if vehicleInstall == nil then
-                                                                    Notify("aviso", "Instalação cancelada, você não está próximo do veículo!")
-                                                                end
-                                                                return
-                                                            end
-                                                        end
-                                                    end)
+        local ped = PlayerPedId()
+        vehicleInstall = getNearestVehicle(5)
 
-                                                    -- Play anim via server
-                                                    TriggerServerEvent("mpr-cars:playInstallAnim")
-                                                    partsProntas[v] = v
-                                                    table.insert(partsProntas, v)
+        if not vehicleInstall then
+            Notify("aviso", "Você não está próximo de um veículo!")
+            return
+        end
+
+        checkSuspension(function(hasSuspe)
+            if hasSuspe then
+                Notify("aviso", "Veículo já possui suspensão a ar")
+                return
+            end
+
+            partsProntas = {}
+            local suspeInstalada = false  -- guard: prevent double fire
+
+            local ppos = GetEntityCoords(ped)
+
+            for _, v in ipairs(parts) do
+                local bone = GetEntityBoneIndexByName(vehicleInstall, v)
+                if bone ~= -1 then
+                    local coords = GetWorldPositionOfEntityBone(vehicleInstall, bone)
+                    if coords then
+                        local len = GetDistanceBetweenCoords(
+                            vector3(ppos.x, ppos.y, ppos.z), coords)
+                        if len < 5 then
+                            local x, y, z = table.unpack(coords)
+                            while vehicleInstall and partsProntas[v] == nil do
+                                DrawMarker(1, x, y, z - 1.5, 0, 0, 0, 0, 0,
+                                    0, 1.0, 1.0, 1.7, 0, 255, 0, 155,
+                                    0, 0, 0, 1)
+                                ppos = GetEntityCoords(ped)
+                                len  = GetDistanceBetweenCoords(
+                                    vector3(ppos.x, ppos.y, ppos.z), coords)
+                                if len < 1 then
+                                    DrawText3D(x, y, z, "Pressione [~r~E~w~] para instalar a suspensão nesta roda.")
+                                    if IsControlJustPressed(0, 38) then
+                                        instalando = true
+                                        Citizen.CreateThread(function()
+                                            while true do
+                                                Citizen.Wait(2000)
+                                                vehicleInstall = getNearestVehicle(5)
+                                                if vehicleInstall == nil or #partsProntas == 4 then
+                                                    if vehicleInstall == nil then
+                                                        Notify("aviso", "Instalação cancelada, você não está próximo do veículo!")
+                                                    end
+                                                    return
                                                 end
                                             end
-                                            if #partsProntas == 4 then
-                                                TriggerServerEvent("mpr-cars:setSuspensao", VehToNet(vehicleInstall))
-                                                Notify("sucesso", "Suspensão a ar instalada no veículo!")
-                                            end
-                                            Citizen.Wait(5)
-                                        end
+                                        end)
+                                        TriggerServerEvent("mpr-cars:playInstallAnim")
+                                        partsProntas[v] = v
+                                        table.insert(partsProntas, v)
                                     end
                                 end
+                                -- guard prevents double-trigger after 4th wheel
+                                if #partsProntas == 4 and not suspeInstalada then
+                                    suspeInstalada = true
+                                    TriggerServerEvent("mpr-cars:setSuspensao", VehToNet(vehicleInstall))
+                                    Notify("sucesso", "Suspensão a ar instalada no veículo!")
+                                end
+                                Citizen.Wait(5)
                             end
                         end
-                    else
-                        Notify("aviso", "Veículo já possui suspensão a ar")
                     end
-                end)
-            else
-                Notify("aviso", "Você não está próximo de um veículo!")
+                end
             end
-        else
-            Notify("aviso", "Você não possui permissão para instalar suspensão a ar!")
-        end
+        end)
     end)
 end)
 
@@ -537,7 +548,6 @@ end)
 -- SHOP BLIP + MARKER THREAD
 -----------------------------------------------------------------------------------------------------------------------------------------
 Citizen.CreateThread(function()
-    -- Create map blips
     for _, l in pairs(cfg.blipsShopMec) do
         local v    = l.loc
         local blip = AddBlipForCoord(v.x, v.y, v.z)
@@ -587,6 +597,7 @@ Citizen.CreateThread(function()
         Citizen.Wait(idle)
     end
 end)
+
 -----------------------------------------------------------------------------------------------------------------------------------------
 -- ANIMATION NET EVENTS (triggered by server)
 -----------------------------------------------------------------------------------------------------------------------------------------
