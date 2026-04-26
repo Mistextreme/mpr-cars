@@ -6,39 +6,40 @@ ESX = exports["es_extended"]:getSharedObject()
 -----------------------------------------------------------------------------------------------------------------------------------------
 -- HELPERS
 -----------------------------------------------------------------------------------------------------------------------------------------
-local function getVehicleData(source)
-    -- Returns: plate, vname via ESX player's vehicle state
-    -- We store tuning under xPlayer identifier + plate key
-    local xPlayer = ESX.GetPlayerFromId(source)
-    if not xPlayer then return nil, nil end
-    return xPlayer
-end
-
 local function getTuningKey(identifier, plate, vname)
     return "customVehicle:" .. identifier .. "veh_" .. (vname or "unknown") .. "placa_" .. plate
 end
 
-local function getPlateFromNetVehicle(netId)
-    -- Attempt to get plate from networked vehicle entity
-    if NetworkDoesEntityExistWithNetworkId(netId) then
-        local veh = NetToVeh(netId)
-        if veh and veh ~= 0 then
-            return string.gsub(GetVehicleNumberPlateText(veh), "%s+", ""),
-                   GetEntityModel(veh)
-        end
-    end
-    return nil, nil
-end
-
+-- Server-safe nearest vehicle: enumerate all vehicles and find closest to player ped
 local function getNearestVehicleForPlayer(source, radius)
-    -- Get coords from player ped via native
     local ped    = GetPlayerPed(source)
     local coords = GetEntityCoords(ped)
-    local nearby = GetClosestVehicle(coords.x, coords.y, coords.z, radius, 0, 70)
-    if nearby and nearby ~= 0 then
-        return nearby
+    local nearest = nil
+    local nearestDist = radius + 1
+
+    local vehicles = GetAllVehicles()
+    for _, veh in ipairs(vehicles) do
+        if DoesEntityExist(veh) then
+            local vcoords = GetEntityCoords(veh)
+            local dist = #(vector3(coords.x, coords.y, coords.z) - vector3(vcoords.x, vcoords.y, vcoords.z))
+            if dist < nearestDist then
+                nearestDist = dist
+                nearest = veh
+            end
+        end
     end
-    return nil
+    return nearest
+end
+
+-- Check if player has a job matching any entry in a list
+local function playerHasJob(xPlayer, jobList)
+    local playerJob = xPlayer.getJob().name
+    for _, jobName in pairs(jobList) do
+        if playerJob == jobName then
+            return true
+        end
+    end
+    return false
 end
 
 -----------------------------------------------------------------------------------------------------------------------------------------
@@ -49,13 +50,11 @@ ESX.RegisterServerCallback("mpr-cars:checkPermission", function(source, cb)
     if not xPlayer then cb(false) return end
 
     if cfg.permissaoParaInstalar.existePermissao then
-        for _, group in pairs(cfg.permissaoParaInstalar.permissoes) do
-            if xPlayer.getGroup() == group or xPlayer.hasGroup(group) then
-                cb(true)
-                return
-            end
+        if playerHasJob(xPlayer, cfg.permissaoParaInstalar.permissoes) then
+            cb(true)
+        else
+            cb(false)
         end
-        cb(false)
     else
         cb(true)
     end
@@ -65,7 +64,7 @@ ESX.RegisterServerCallback("mpr-cars:checkPermissionShop", function(source, cb, 
     local xPlayer = ESX.GetPlayerFromId(source)
     if not xPlayer then cb(false) return end
 
-    if xPlayer.getGroup() == perm or xPlayer.hasGroup(perm) then
+    if xPlayer.getJob().name == perm then
         cb(true)
     else
         cb(false)
@@ -87,24 +86,19 @@ ESX.RegisterServerCallback("mpr-cars:checkXenon", function(source, cb)
     local vname = tostring(GetEntityModel(veh))
 
     if plate and plate ~= "" then
-        local key    = getTuningKey(identifier, plate, vname)
-        local tuning = exports.oxmysql and nil -- fallback: use KVP
-        -- Using FiveM built-in KVP (no external DB required for tuning flags)
-        local raw    = GetResourceKvpString(key)
-        local custom = raw and json.decode(raw) or {}
-
         if cfg.apenasDonoAcessaXenon then
-            -- Only owner can access
             local ownerKey = "vehicle_owner:" .. plate
             local ownerId  = GetResourceKvpString(ownerKey)
-            if ownerId and ownerId == identifier then
-                cb(custom.xenonControl == 1)
-            else
+            if not ownerId or ownerId ~= identifier then
                 cb(false)
+                return
             end
-        else
-            cb(custom.xenonControl == 1)
         end
+
+        local key    = getTuningKey(identifier, plate, vname)
+        local raw    = GetResourceKvpString(key)
+        local custom = raw and json.decode(raw) or {}
+        cb(custom.xenonControl == 1)
     else
         cb(false)
     end
@@ -118,7 +112,6 @@ AddEventHandler("mpr-cars:installXenon", function(netVehicle)
 
     local item = xPlayer.getInventoryItem("moduloxenon")
     if item and item.count >= 1 then
-        -- Play animation on client
         TriggerClientEvent("mpr-cars:playAnim", source, true, {{"mini@repair", "fixing_a_ped", 1}})
         TriggerClientEvent("progress", source, 30000, "Instalando módulo de Xenon")
 
@@ -132,7 +125,6 @@ AddEventHandler("mpr-cars:installXenon", function(netVehicle)
                 local vname = tostring(GetEntityModel(veh))
                 local key   = getTuningKey(identifier, plate, vname)
 
-                -- Store owner reference
                 SetResourceKvp("vehicle_owner:" .. plate, identifier)
 
                 local raw    = GetResourceKvpString(key)
@@ -164,21 +156,19 @@ ESX.RegisterServerCallback("mpr-cars:checkNeon", function(source, cb)
     local vname = tostring(GetEntityModel(veh))
 
     if plate and plate ~= "" then
-        local key    = getTuningKey(identifier, plate, vname)
-        local raw    = GetResourceKvpString(key)
-        local custom = raw and json.decode(raw) or {}
-
         if cfg.apenasDonoAcessaNeon then
             local ownerKey = "vehicle_owner:" .. plate
             local ownerId  = GetResourceKvpString(ownerKey)
-            if ownerId and ownerId == identifier then
-                cb(custom.neonControl == 1)
-            else
+            if not ownerId or ownerId ~= identifier then
                 cb(false)
+                return
             end
-        else
-            cb(custom.neonControl == 1)
         end
+
+        local key    = getTuningKey(identifier, plate, vname)
+        local raw    = GetResourceKvpString(key)
+        local custom = raw and json.decode(raw) or {}
+        cb(custom.neonControl == 1)
     else
         cb(false)
     end
@@ -236,21 +226,19 @@ ESX.RegisterServerCallback("mpr-cars:checkSuspension", function(source, cb)
     local vname = tostring(GetEntityModel(veh))
 
     if plate and plate ~= "" then
-        local key    = getTuningKey(identifier, plate, vname)
-        local raw    = GetResourceKvpString(key)
-        local custom = raw and json.decode(raw) or {}
-
         if cfg.apenasDonoAcessaSuspensao then
             local ownerKey = "vehicle_owner:" .. plate
             local ownerId  = GetResourceKvpString(ownerKey)
-            if ownerId and ownerId == identifier then
-                cb(custom.suspensaoAr == 1)
-            else
+            if not ownerId or ownerId ~= identifier then
                 cb(false)
+                return
             end
-        else
-            cb(custom.suspensaoAr == 1)
         end
+
+        local key    = getTuningKey(identifier, plate, vname)
+        local raw    = GetResourceKvpString(key)
+        local custom = raw and json.decode(raw) or {}
+        cb(custom.suspensaoAr == 1)
     else
         cb(false)
     end
@@ -306,10 +294,10 @@ ESX.RegisterServerCallback("mpr-cars:returnPreset", function(source, cb)
     local veh        = getNearestVehicleForPlayer(source, 5)
     if not veh then cb(0) return end
 
-    local plate = string.gsub(GetVehicleNumberPlateText(veh), "%s+", "")
-    local vname = tostring(GetEntityModel(veh))
-    local key   = getTuningKey(identifier, plate, vname)
-    local raw   = GetResourceKvpString(key)
+    local plate  = string.gsub(GetVehicleNumberPlateText(veh), "%s+", "")
+    local vname  = tostring(GetEntityModel(veh))
+    local key    = getTuningKey(identifier, plate, vname)
+    local raw    = GetResourceKvpString(key)
     local custom = raw and json.decode(raw) or {}
 
     if custom.presetSuspe ~= nil then
@@ -329,10 +317,10 @@ AddEventHandler("mpr-cars:setPreset", function(value)
     local veh        = getNearestVehicleForPlayer(source, 5)
     if not veh then return end
 
-    local plate = string.gsub(GetVehicleNumberPlateText(veh), "%s+", "")
-    local vname = tostring(GetEntityModel(veh))
-    local key   = getTuningKey(identifier, plate, vname)
-    local raw   = GetResourceKvpString(key)
+    local plate  = string.gsub(GetVehicleNumberPlateText(veh), "%s+", "")
+    local vname  = tostring(GetEntityModel(veh))
+    local key    = getTuningKey(identifier, plate, vname)
+    local raw    = GetResourceKvpString(key)
     local custom = raw and json.decode(raw) or {}
 
     custom.presetSuspe = value
@@ -371,7 +359,6 @@ AddEventHandler("mpr-cars:comprar", function(item)
 
     for _, v in pairs(cfg.valores) do
         if item == v.item then
-            local weight    = xPlayer.getInventoryItem(v.item)
             local preco     = tonumber(v.compra)
             local quantidade = tonumber(v.quantidade)
 
@@ -387,10 +374,3 @@ AddEventHandler("mpr-cars:comprar", function(item)
         end
     end
 end)
-
------------------------------------------------------------------------------------------------------------------------------------------
--- ANIMATION EVENTS (client-side handlers triggered from server)
------------------------------------------------------------------------------------------------------------------------------------------
--- These are triggered on client via TriggerClientEvent("mpr-cars:playAnim") and ("mpr-cars:stopAnim")
--- The actual TaskPlayAnim natives run on client; registered below as net events on client side
--- (handled in client.lua via RegisterNetEvent)
