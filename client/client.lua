@@ -587,3 +587,25 @@ Citizen.CreateThread(function()
         Citizen.Wait(idle)
     end
 end)
+-----------------------------------------------------------------------------------------------------------------------------------------
+-- ANIMATION NET EVENTS (triggered by server)
+-----------------------------------------------------------------------------------------------------------------------------------------
+RegisterNetEvent("mpr-cars:playAnim")
+AddEventHandler("mpr-cars:playAnim", function(loop, anims)
+    local ped = PlayerPedId()
+    for _, anim in ipairs(anims) do
+        local dict, name = anim[1], anim[2]
+        RequestAnimDict(dict)
+        while not HasAnimDictLoaded(dict) do
+            Citizen.Wait(10)
+        end
+        local flags = loop and 1 or 0
+        TaskPlayAnim(ped, dict, name, 8.0, -8.0, -1, flags, 0, false, false, false)
+    end
+end)
+
+RegisterNetEvent("mpr-cars:stopAnim")
+AddEventHandler("mpr-cars:stopAnim", function()
+    local ped = PlayerPedId()
+    ClearPedTasks(ped)
+end)
